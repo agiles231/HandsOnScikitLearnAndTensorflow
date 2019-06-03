@@ -1,60 +1,76 @@
-import os
-import tarfile
 import pandas as pd
+from pandas.plotting import scatter_matrix
 import matplotlib.pyplot as plt
 import numpy as np
+import dataload as dl
+from HousingFeatureExtractor import HousingFeatureExtractor
+from HousingDataAttrSelector import HousingDataAttrSelector
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit
-from six.moves import urllib
-
-DOWNLOAD_ROOT = "https://raw.githubusercontent.com/ageron/handson-ml/master/"
-HOUSING_PATH = os.path.join("datasets", "housing")
-HOUSING_URL = DOWNLOAD_ROOT + "datasets/housing/housing.tgz"
-
-def fetch_housing_data(housing_url=HOUSING_URL, housing_path=HOUSING_PATH) :
-    if not os.path.isdir(housing_path):
-        os.makedirs(housing_path)
-    tgz_path = os.path.join(housing_path, "housing.tgz")
-    urllib.request.urlretrieve(housing_url, tgz_path)
-    housing_tgz = tarfile.open(tgz_path)
-    housing_tgz.extractall(path=housing_path)
-    housing_tgz.close()
-
-def load_housing_data(housing_path=HOUSING_PATH):
-    csv_path = os.path.join(housing_path, "housing.csv")
-    return pd.read_csv(csv_path)
-
-def clean_housing_data(housing_data):
-    return housing_data
-
+from sklearn.linear_model import LinearRegression
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import mean_squared_error
 
 def main():
-    #fetch_housing_data() # we have already done this before, and we don't want to change our data
-    housing_data = load_housing_data()
-    housing_data = clean_housing_data(housing_data)
-    train_data, test_data = train_test_split(housing_data, test_size = 0.2, random_state=42)
-    housing_data["income_cat"] = np.ceil(housing_data["median_income"] / 1.5)
-    housing_data["income_cat"].where(housing_data["income_cat"] < 5, 5.0, inplace=True)
-    housing_data["income_cat"].hist()
-    plt.show()
+
+    housing = dl.load_housing_data()
+    housing.dropna(subset=["total_bedrooms"], how='all', inplace=True)
+    housing["income_cat"] = np.ceil(housing["median_income"] / 1.5)
+    housing["income_cat"].where(housing["income_cat"] < 5, 5.0, inplace=True)
     split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    for train_index, test_index in split.split(housing_data, housing_data["income_cat"]):
-        strat_train_set = housing_data.loc[train_index]
-        strat_test_set = housing_data.loc[test_index]
-    print(strat_test_set["income_cat"].value_counts() / len(strat_test_set))
+    for train_index, test_index in split.split(housing, housing["income_cat"]):
+        strat_train_set = housing.iloc[train_index]
+        strat_test_set = housing.iloc[test_index]
     for set_ in (strat_train_set, strat_test_set):
         set_.drop("income_cat", axis=1, inplace=True)
-    housing_data = strat_train_set.copy()
-    housing_data.plot(kind="scatter", x="longitude", y="latitude", alpha=0.1)
-    plt.show()
+    housing = strat_train_set.drop("median_house_value", axis=1)
+    housing_labels = strat_train_set["median_house_value"].copy()
+    housing_num = housing.drop("ocean_proximity", axis=1)
+    
+    housing_cat = housing["ocean_proximity"]
+    #housing_cat_encoded, housing_categories = housing_cat.factorize()
+    #encoder = OneHotEncoder(categories='auto')
+    #housing_cat_1hot = encoder.fit_transform(housing_cat_encoded.reshape(-1, 1))
 
-    housing_data.plot(kind="scatter", x="longitude", y="latitude", alpha=0.4
-        , s=housing_data["population"]/100, label="population", figsize=(10,7)
-        , c="median_house_value", cmap=plt.get_cmap("jet"), colorbar=True)
-    plt.show()
-    plt.legend()
-    
-    
+    num_attribs = list(housing_num)
+    cat_attribs = ["ocean_proximity"]
+
+    num_pipeline = Pipeline([
+        ("selector", HousingDataAttrSelector(num_attribs)),
+        ("imputer", SimpleImputer(strategy="median")),
+        ("featureExtractor", HousingFeatureExtractor()),
+        ("std_scalar", StandardScaler())
+    ])
+
+    #cat_pipeline = Pipeline([
+    #    ("selector", HousingDataAttrSelector(cat_attribs)),
+    #    ("cat_encoder", CategoricalEncoder(encoding="onehot-dense"))
+    #])
+    full_pipeline = ColumnTransformer([
+        ("num", num_pipeline, num_attribs),
+        ("cat", OneHotEncoder(), cat_attribs)
+    ])
+    housing_prepared = full_pipeline.fit_transform(housing)
+    #print(housing_prepared.loc[19391])
+    lin_reg = LinearRegression()
+    lin_reg.fit(housing_prepared, housing_labels)
+
+    some_data = housing.iloc[:5]
+    some_labels = housing_labels.iloc[:5]
+    some_data_prepared = full_pipeline.transform(some_data)
+    housing_predictions = lin_reg.predict(housing_prepared)
+    print("Predictions: ", housing_predictions)
+    print("Labels: ", some_labels)
+
+    lin_mse = mean_squared_error(housing_labels, housing_predictions)
+    lin_rmse = np.sqrt(lin_mse)
+    print(lin_rmse)
+
+
 
 if __name__ == "__main__":
     main()
